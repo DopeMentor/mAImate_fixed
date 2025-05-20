@@ -23,3 +23,9 @@ android/app/build/
 *.log
 
 android/app/build/
+/build/
+/.dart_tool/
+/android/app/build/
+/build/
+/.dart_tool/
+/android/app/build/
