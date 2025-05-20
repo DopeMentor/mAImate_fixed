@@ -1,16 +1,31 @@
-# maimate_fixed
+# mAImate_fixed
 
-A new Flutter project.
+Tervetuloa mAImate-projektiin! Tämä on älykäs, puheohjattu Flutter-pohjainen AI-assistentti.
 
-## Getting Started
+## Kehittäjä
 
-This project is a starting point for a Flutter application.
+Mentor Orllati
 
-A few resources to get you started if this is your first Flutter project:
+## Kuvaus
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+mAImate on henkilökohtainen tekoälyavustaja, joka osaa:
+- ymmärtää puhetta
+- vastata luonnollisella kielellä
+- lisätä tapahtumia kalenteriin
+- integroitua sähköpostiin, viesteihin ja sosiaaliseen mediaan
+- hallita tehtäviä ja antaa hinta-arvioita kiinteistöistä
+- muistaa asioita keskusteluista (muistiominaisuus)
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Teknologiat
+
+- Flutter (iOS, Android)
+- Firebase (Auth, Firestore, Functions)
+- Hugging Face + OpenAI (NLP)
+- GitHub + CI/CD
+
+## Asennus
+
+```bash
+flutter pub get
+flutter run
+
