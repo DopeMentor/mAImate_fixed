@@ -5,192 +5,110 @@ const axios = require("axios");
 admin.initializeApp();
 const db = admin.firestore();
 
-// Konfiguraatiot
-const CONFIG = {
-  USE_AI: true, // Vaihda falseksi jos haluat käyttää vain mock-vastauksia
-  AI_API_KEY: process.env.HUGGINGFACE_API_KEY || "YOUR_API_KEY",
-  AI_ENDPOINT: "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium",
-  AI_TIMEOUT: 5000, // 5 sekuntia
-  CORS_ENABLED: true
-};
+const OPENAI_API_KEY = functions.config().openai.key;
+const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
 exports.nlp = functions.https.onRequest(async (req, res) => {
-  // CORS-käsittely
-  if (CONFIG.CORS_ENABLED) {
-    res.set("Access-Control-Allow-Origin", "*");
-    res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.set("Access-Control-Allow-Headers", "Content-Type");
-    
-    if (req.method === "OPTIONS") {
-      return res.status(204).send("");
-    }
+  const { text } = req.body;
+
+  if (!text) {
+    return res.status(400).json({ error: "Missing input text" });
   }
 
   try {
-    const { message, userId, confirmed = false } = req.body;
+    const systemPrompt = `
+Analysoi seuraava lause ja palauta vain tämä JSON-rakenne (ei mitään muuta ympärille):
 
-    // Validointi
-    if (!message) {
-      return res.status(400).json({ 
-        reply: "Virhe: Puuttuva viesti",
-        needsConfirmation: false 
-      });
-    }
-
-    // Intent-tunnistus
-    const intent = detectIntent(message);
-    const entities = extractEntities(message);
-
-    // AI-vastaus (joko oikea API tai mock)
-    let aiReply = CONFIG.USE_AI
-      ? await callAI(message).catch(() => generateMockReply(message, intent))
-      : generateMockReply(message, intent);
-
-    // Tallenna muistiin
-    if (userId) {
-      await saveMemory(userId, message, intent, entities, aiReply);
-    }
-
-    // Kalenterilogiiikka
-    if (intent === "calendar") {
-      return handleCalendarIntent(
-        res, confirmed, entities, userId, aiReply
-      );
-    }
-
-    // Muistihaku
-    if (intent === "memory_lookup" && userId) {
-      return handleMemoryLookup(res, userId);
-    }
-
-    // Oletusvastaus
-    return res.json({
-      reply: aiReply,
-      intent,
-      entities,
-      needsConfirmation: false
-    });
-
-  } catch (error) {
-    console.error("Virhe NLP-funktiossa:", error);
-    return res.status(500).json({
-      reply: "Järjestelmävirhe. Yritä uudelleen.",
-      needsConfirmation: false
-    });
+{
+  "reply": "Vastaus käyttäjälle",
+  "intent": "intent-nimi",
+  "entities": {
+    "dates": ["päivä"],
+    "times": ["kellonaika"],
+    "locations": ["paikka"],
+    "people": ["nimi"]
   }
-});
+}
+`.trim();
 
-// Apufunktiot
-async function callAI(prompt) {
-  try {
     const response = await axios.post(
-      CONFIG.AI_ENDPOINT,
-      { inputs: prompt },
+      OPENAI_API_URL,
       {
-        headers: { Authorization: `Bearer ${CONFIG.AI_API_KEY}` },
-        timeout: CONFIG.AI_TIMEOUT
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: text },
+        ],
+        temperature: 0.3,
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+        },
       }
     );
 
-    return response.data?.generated_text || 
-           response.data?.[0]?.generated_text || 
-           "En osaa vastata tähän vielä.";
-  } catch (error) {
-    console.error("AI-kutsun virhe:", error.message);
-    throw error;
-  }
-}
+    console.log("✅ FULL OPENAI RESPONSE:");
+    console.dir(response.data, { depth: null });
 
-function generateMockReply(message, intent) {
-  const mockResponses = {
-    calendar: {
-      reply: `Haluatko varmasti lisätä tapahtuman '${message}'?`,
-      needsConfirmation: true
-    },
-    memory: {
-      reply: `Tallensin muistiin: "${message}"`,
-      needsConfirmation: false
-    },
-    memory_lookup: {
-      reply: "Näytän sinulle muistisi pian...",
-      needsConfirmation: false
-    },
-    default: {
-      reply: `Ymmärsin kysymyksesi: "${message}"`,
-      needsConfirmation: false
+    const choice = response.data.choices?.[0]?.message?.content;
+    if (!choice) {
+      return res.status(500).json({ error: "OpenAI ei palauttanut sisältöä" });
     }
-  };
 
-  return mockResponses[intent] || mockResponses.default;
-}
+    const jsonMatch = choice.match(/{[\s\S]*}/);
+    if (!jsonMatch) {
+      return res.status(500).json({ error: "OpenAI ei palauttanut JSONia" });
+    }
 
-async function saveMemory(userId, message, intent, entities, reply) {
-  const memoryData = {
-    userId,
-    message,
-    intent,
-    entities,
-    reply,
-    createdAt: admin.firestore.FieldValue.serverTimestamp()
-  };
+    const parsed = JSON.parse(jsonMatch[0]);
+    const { reply, intent, entities } = parsed;
 
-  return db.collection("memories").add(memoryData);
-}
-
-async function handleCalendarIntent(res, confirmed, entities, userId, aiReply) {
-  if (confirmed) {
-    const eventData = {
-      userId,
-      title: entities.title || "Tapahtuma",
-      date: entities.date || "",
-      time: entities.time || "",
-      location: entities.location || "",
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-
-    await db.collection("calendarEvents").add(eventData);
-
-    return res.json({
-      reply: "✅ Tapahtuma tallennettu kalenteriin!",
-      needsConfirmation: false
+    await db.collection("memories").add({
+      text,
+      reply,
+      intent,
+      entities,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
     });
+
+    if (intent === "meeting" && entities?.dates?.length > 0) {
+      const dateStr = entities.dates[0];
+      const timeStr = entities.times?.[0] || "12:00";
+      const parsedDate = parseDateTime(dateStr, timeStr);
+
+      if (parsedDate) {
+        await db.collection("events").add({
+          title: text,
+          date: admin.firestore.Timestamp.fromDate(parsedDate),
+          createdByAI: true,
+          sourceText: text,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    return res.status(200).json({ reply, intent, entities });
+  } catch (error) {
+    console.error("🔥 OPENAI ERROR:", error?.response?.data || error.message);
+    return res.status(500).json({ error: "OpenAI-virhe" });
   }
+});
 
-  return res.json({
-    reply: aiReply,
-    needsConfirmation: true
-  });
+function parseDateTime(dateStr, timeStr) {
+  try {
+    const parts = dateStr.split(/[.\-/]/);
+    const timeParts = timeStr.split(":");
+    const day = parseInt(parts[0]);
+    const month = parseInt(parts[1]) - 1;
+    const year = parts[2] ? parseInt(parts[2]) : new Date().getFullYear();
+    const hour = parseInt(timeParts[0]);
+    const minute = parseInt(timeParts[1]);
+    return new Date(year, month, day, hour, minute);
+  } catch (err) {
+    console.error("❌ DATE PARSE ERROR:", err.message);
+    return null;
+  }
 }
 
-async function handleMemoryLookup(res, userId) {
-  const snapshot = await db.collection("memories")
-    .where("userId", "==", userId)
-    .orderBy("createdAt", "desc")
-    .limit(5)
-    .get();
-
-  const memories = snapshot.docs.map(doc => doc.data().message);
-  const reply = memories.length > 0
-    ? `Viimeisimmät muistisi:\n- ${memories.join("\n- ")}`
-    : "Ei tallennettuja muistoja.";
-
-  return res.json({ reply, needsConfirmation: false });
-}
-
-function detectIntent(text) {
-  const lowered = text.toLowerCase();
-  if (/muista|tallenna/.test(lowered)) return "memory";
-  if (/näytä\s+muistot|muistot/.test(lowered)) return "memory_lookup";
-  if (/kalenteri|tapahtuma|tapaaminen|klo|maanantai|tiistai|keskiviikko|torstai|perjantai/.test(lowered)) return "calendar";
-  if (/hinta|arvio|kustannus/.test(lowered)) return "price_estimate";
-  return "default";
-}
-
-function extractEntities(text) {
-  return {
-    date: text.match(/\d{1,2}\.\d{1,2}(?:\.\d{2,4})?|\d{1,2}\/\d{1,2}/)?.[0] || null,
-    time: text.match(/\b\d{1,2}[:.]\d{2}\b|\bklo\s?\d{1,2}\b/i)?.[0].replace("klo", "").trim() || null,
-    location: text.match(/(?:paikassa|osoitteessa|paikka|sijainti)\s+([^.,!?]+)/i)?.[1].trim() || null,
-    title: text.match(/(?:lisää|luo)\s+([^.,!?]+)/i)?.[1].trim() || null
-  };
-}

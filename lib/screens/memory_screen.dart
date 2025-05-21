@@ -1,62 +1,62 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
+import '../services/firebase_service.dart';
 
-class MemoryScreen extends StatelessWidget {
-  const MemoryScreen({Key? key}) : super(key: key);
+class MemoryScreen extends StatefulWidget {
+  const MemoryScreen({super.key});
 
-  Future<List<Map<String, dynamic>>> _fetchMemories() async {
-    final userId = FirebaseAuth.instance.currentUser?.uid ?? 'default_user';
+  @override
+  State<MemoryScreen> createState() => _MemoryScreenState();
+}
 
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(userId)
-        .collection('memories')
-        .orderBy('createdAt', descending: true)
-        .get();
+class _MemoryScreenState extends State<MemoryScreen> {
+  List<Map<String, dynamic>> _memories = [];
+  bool _loading = true;
 
-    return snapshot.docs.map((doc) => doc.data()).toList();
+  @override
+  void initState() {
+    super.initState();
+    _loadMemories();
+  }
+
+  Future<void> _loadMemories() async {
+    final firebaseService = Provider.of<FirebaseService>(context, listen: false);
+    final data = await firebaseService.getMemories();
+    setState(() {
+      _memories = data;
+      _loading = false;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Muistot')),
-      body: FutureBuilder<List<Map<String, dynamic>>>(
-        future: _fetchMemories(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          } else if (snapshot.hasError) {
-            return const Center(child: Text('Virhe haettaessa muistoja.'));
-          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text('Ei muistoja vielä.'));
-          }
+      appBar: AppBar(title: const Text('Muisti')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView.builder(
+              itemCount: _memories.length,
+              itemBuilder: (context, index) {
+                final memory = _memories[index];
+                final intent = memory['intent'] ?? '-';
+                final reply = memory['reply'] ?? '-';
+                final text = memory['text'] ?? '-';
+                final timestamp = memory['timestamp']?.toDate().toString().substring(0, 16) ?? '';
 
-          final memories = snapshot.data!;
-
-          return ListView.builder(
-            itemCount: memories.length,
-            itemBuilder: (context, index) {
-              final memory = memories[index];
-              final message = memory['message'] ?? '';
-              final reply = memory['reply'] ?? '';
-              final createdAt = memory['createdAt']?.toDate();
-
-              return ListTile(
-                title: Text(message),
-                subtitle: Text(reply),
-                trailing: createdAt != null
-                    ? Text(
-                        '${createdAt.day}.${createdAt.month}.${createdAt.year}',
-                        style: const TextStyle(fontSize: 12),
-                      )
-                    : null,
-              );
-            },
-          );
-        },
-      ),
+                return ListTile(
+                  title: Text(text),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Intent: $intent'),
+                      Text('Vastaus: $reply'),
+                      if (timestamp.isNotEmpty) Text('Aika: $timestamp'),
+                    ],
+                  ),
+                  isThreeLine: true,
+                );
+              },
+            ),
     );
   }
 }
